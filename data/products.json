@@ -1,0 +1,114 @@
+[
+  {
+    "id": "pf-001",
+    "name": "Classic Photo Frame",
+    "price": 150,
+    "category": "Photo Frames",
+    "image": "https://photokadai.in/wp-content/uploads/2024/08/Acrylic-HD-Photo-Frame-Wall-Mounted-With-Stud.jpg",
+    "description": "Elegant wooden photo frame for 5x7 photos."
+  },
+  {
+    "id": "cm-001",
+    "name": "Custom Coffee Mug",
+    "price": 249,
+    "category": "Coffee Mugs",
+    "image": "https://images.unsplash.com/photo-1462917882517-e150004895fa?auto=format&fit=crop&w=600&q=80",
+    "description": "Ceramic mug with your photo printed."
+  },
+  {
+    "id": "cm-002",
+    "name": "Hidden Photo Mug",
+    "price": 399,
+    "category": "Coffee Mugs",
+    "image": "https://images.unsplash.com/photo-1504753793650-d4a2b783c15e?auto=format&fit=crop&w=600&q=80",
+    "description": "Heat reveal mug showing a hidden photo."
+  },
+  {
+    "id": "ll-001",
+    "name": "Custom Light Lamp",
+    "price": 899,
+    "category": "Lamps",
+    "image": "https://images.unsplash.com/photo-1493663284031-b7e3aefcae8e?auto=format&fit=crop&w=600&q=80",
+    "description": "Personalized night lamp with etched image."
+  },
+  {
+    "id": "hp-001",
+    "name": "Heart Pillow",
+    "price": 599,
+    "category": "Pillows",
+    "image": "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?auto=format&fit=crop&w=600&q=80",
+    "description": "Soft heart pillow printed with your photo."
+  },
+  {
+    "id": "pl-001",
+    "name": "Photo Lamp Cube",
+    "price": 1199,
+    "category": "Lamps",
+    "image": "https://images.unsplash.com/photo-1473186578172-c141e6798cf4?auto=format&fit=crop&w=600&q=80",
+    "description": "Cube lamp that showcases multiple photos."
+  },
+  {
+    "id": "pf-002",
+    "name": "Collage Photo Frame (8 Photos)",
+    "price": 749,
+    "category": "Photo Frames",
+    "image": "https://images.unsplash.com/photo-1452800185063-6db5e12b8e2e?auto=format&fit=crop&w=600&q=80",
+    "description": "Wall collage frame for 8 small photos."
+  },
+  {
+    "id": "mg-001",
+    "name": "Magic Mirror Photo Frame",
+    "price": 1399,
+    "category": "Photo Frames",
+    "image": "https://images.unsplash.com/photo-1519710887729-8e3f2c0f742c?auto=format&fit=crop&w=600&q=80",
+    "description": "LED magic mirror frame with custom photo."
+  },
+  {
+    "id": "cm-003",
+    "name": "Couple Name Mug Set (2)",
+    "price": 499,
+    "category": "Coffee Mugs",
+    "image": "https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&fit=crop&w=600&q=80",
+    "description": "Two mugs printed with names & date."
+  },
+  {
+    "id": "ks-001",
+    "name": "Photo Keychain (Acrylic)",
+    "price": 149,
+    "category": "Keychains",
+    "image": "https://images.unsplash.com/photo-1591035897819-f4bdf739f446?auto=format&fit=crop&w=600&q=80",
+    "description": "Pocket-size acrylic photo keychain."
+  },
+  {
+    "id": "pl-002",
+    "name": "3D Photo Lamp (Moon)",
+    "price": 1299,
+    "category": "Lamps",
+    "image": "https://images.unsplash.com/photo-1519710164239-da123dc03ef4?auto=format&fit=crop&w=600&q=80",
+    "description": "3D moon lamp with custom name/photo stand."
+  },
+  {
+    "id": "ph-001",
+    "name": "Heart Photo Pillow (Premium)",
+    "price": 799,
+    "category": "Pillows",
+    "image": "https://images.unsplash.com/photo-1526481280695-3c687fd643ed?auto=format&fit=crop&w=600&q=80",
+    "description": "Premium fabric heart pillow with HD print."
+  },
+  {
+    "id": "cb-001",
+    "name": "Customized Chocolate Box",
+    "price": 699,
+    "category": "Gift Boxes",
+    "image": "https://images.unsplash.com/photo-1511381939415-e44015466834?auto=format&fit=crop&w=600&q=80",
+    "description": "Gift box with name label and chocolates."
+  },
+  {
+    "id": "bd-001",
+    "name": "Birthday Photo Banner",
+    "price": 349,
+    "category": "Decor",
+    "image": "https://images.unsplash.com/photo-1513151233558-d860c5398176?auto=format&fit=crop&w=600&q=80",
+    "description": "Custom birthday banner with photos."
+  }
+]
