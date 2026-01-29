@@ -254,6 +254,14 @@ function cartSummaryText(items, total) {
   return encodeURIComponent(lines.join('\n'));
 }
 
+app.get("/", (req, res) => {
+  res.send("Backend running successfully");
+});
+
+app.get("/data", (req, res) => {
+  res.json({ message: "Data route working" });
+});
+
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
