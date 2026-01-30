@@ -13,8 +13,10 @@
   "license": "ISC",
   "dependencies": {
     "cors": "^2.8.6",
+    "dotenv": "^17.2.3",
     "exceljs": "^4.4.0",
     "express": "^5.2.1",
+    "mongoose": "^9.1.5",
     "pdfkit": "^0.17.2",
     "uuid": "^13.0.0"
   },
