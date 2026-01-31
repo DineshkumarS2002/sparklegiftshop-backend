@@ -6,7 +6,8 @@ const settingsSchema = new mongoose.Schema({
     whatsappNumber: { type: String, default: '' },
     lastInvoiceNumber: { type: Number, default: 0 },
     reportUrl: { type: String, default: '' },
-    logoUrl: { type: String, default: '' }
+    logoUrl: { type: String, default: '' },
+    storeName: { type: String, default: 'Sparkle Gift Shop' }
 });
 
 module.exports = mongoose.model('Settings', settingsSchema);

@@ -10,6 +10,8 @@ const orderSchema = new mongoose.Schema({
         {
             productId: String,
             quantity: Number,
+            variantSize: String,
+            variantPrice: Number,
             product: Object, // Embedded product details for snapshot
             lineTotal: Number
         }

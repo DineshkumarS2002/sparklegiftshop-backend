@@ -162,6 +162,36 @@ async function ensureSeed() {
     await Settings.create(defaultSettings);
     console.log('Seeded settings');
   }
+
+  // Migration: Update old UUID-style IDs to the new format for consistency
+  const allProducts = await Product.find({ id: /^p-/ });
+  for (const p of allProducts) {
+    const cleanName = p.name.trim().split(' ')[0].replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, 5);
+    const existingProductsWithPrefix = await Product.find({ id: new RegExp(`^${cleanName}`) });
+    const nextNum = existingProductsWithPrefix.length + 1;
+    const newId = `${cleanName}-${String(nextNum).padStart(3, '0')}`;
+
+    const oldId = p.id;
+    console.log(`Migrating ID: ${oldId} -> ${newId}`);
+
+    // Update the product itself
+    await Product.updateOne({ _id: p._id }, { $set: { id: newId } });
+
+    // Update references in Orders (Array update)
+    await Order.updateMany(
+      { "items.productId": oldId },
+      { $set: { "items.$[elem].productId": newId } },
+      { arrayFilters: [{ "elem.productId": oldId }] }
+    );
+
+    // Update references in Carts (Array update)
+    await Cart.updateMany(
+      { "items.productId": oldId },
+      { $set: { "items.$[elem].productId": newId } },
+      { arrayFilters: [{ "elem.productId": oldId }] }
+    );
+  }
+
 }
 
 async function getCart() {
@@ -210,11 +240,14 @@ function withProductDetails(cartItems, products) {
       // Otherwise, look up from master list.
       const product = item.product || map.get(item.productId);
       if (!product) return null;
-      const lineTotal = +(product.price * item.quantity).toFixed(2);
+      const price = item.variantPrice || product.price;
+      const lineTotal = +(price * item.quantity).toFixed(2);
       // Ensure we return a plain object structure
       return {
         productId: item.productId,
         quantity: item.quantity,
+        variantSize: item.variantSize,
+        variantPrice: item.variantPrice,
         product,
         lineTotal
       };
@@ -227,6 +260,10 @@ function withProductDetails(cartItems, products) {
 function summarizeOrders(orders, range = 'daily') {
   const groups = new Map();
   orders.forEach((order) => {
+    // Filter: Only count COD or Paid/Screenshot UPI orders in reports
+    const isActive = order.paymentMethod === 'cod' || order.isPaid || !!order.paymentScreenshot;
+    if (!isActive) return;
+
     const date = new Date(order.createdAt);
     if (Number.isNaN(date.getTime())) return;
     const key =
@@ -247,6 +284,7 @@ function summarizeOrders(orders, range = 'daily') {
     .map(([label, value]) => ({ label, ...value, total: +value.total.toFixed(2) }));
 }
 
+
 function cartSummaryText(items, total) {
   const lines = items.map(
     (item) => `*${item.quantity} x ${item.product.name}* = ₹${item.lineTotal}`,
@@ -259,6 +297,10 @@ function summarizeProductSales(orders) {
   const productStats = new Map();
 
   orders.forEach(order => {
+    // Filter: Only count COD or Paid/Screenshot UPI orders in stats
+    const isActive = order.paymentMethod === 'cod' || order.isPaid || !!order.paymentScreenshot;
+    if (!isActive) return;
+
     if (!order.items) return;
     order.items.forEach(item => {
       const pName = item.product?.name || `Product ${item.productId}`;
@@ -303,18 +345,27 @@ app.get('/api/products', async (_req, res) => {
 
 app.post('/api/products', async (req, res) => {
   try {
-    const { name, price, category, image, description } = req.body;
+    const { name, price, category, image, description, variants } = req.body;
     if (!name || !price) {
       return res.status(400).json({ message: 'name and price are required' });
     }
+    const cleanName = name.trim().split(' ')[0].replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, 5);
+    const existingCount = await Product.countDocuments({
+      id: { $regex: new RegExp(`^${cleanName}`) }
+    });
+    const itemCode = `${cleanName}-${String(existingCount + 1).padStart(3, '0')}`;
+
+
     const newProduct = new Product({
-      id: `p-${uuidv4()}`,
+      id: itemCode,
       name,
       price: Number(price),
       category: category || 'General',
       image: image || '',
       description: description || '',
+      variants: variants || []
     });
+
     await newProduct.save();
     res.status(201).json(newProduct);
   } catch (err) {
@@ -359,10 +410,13 @@ async function getProductsForCart(cartItems) {
   const items = cartItems.map(item => {
     const product = item.product || productMap.get(item.productId);
     if (!product) return null;
-    const lineTotal = +(product.price * item.quantity).toFixed(2);
+    const price = item.variantPrice || product.price;
+    const lineTotal = +(price * item.quantity).toFixed(2);
     return {
       productId: item.productId,
       quantity: item.quantity,
+      variantSize: item.variantSize,
+      variantPrice: item.variantPrice,
       product,
       lineTotal
     };
@@ -384,14 +438,29 @@ app.get('/api/cart', async (_req, res) => {
 
 app.post('/api/cart/add', async (req, res) => {
   try {
-    const { productId, quantity = 1 } = req.body;
+    const { productId, quantity = 1, variant } = req.body;
     const product = await Product.findOne({ id: productId }).select('id price name').lean();
     if (!product) return res.status(404).json({ message: 'Product not found' });
 
     const cart = await getCart();
-    const existing = cart.items.find((item) => item.productId === productId);
-    if (existing) existing.quantity += Number(quantity) || 1;
-    else cart.items.push({ productId, quantity: Number(quantity) || 1 });
+    // Check if item with same product AND same variant exists
+    const variantSize = variant ? variant.size : null;
+
+    const existing = cart.items.find((item) =>
+      item.productId === productId && item.variantSize === variantSize
+    );
+
+    if (existing) {
+      existing.quantity += Number(quantity) || 1;
+    } else {
+      cart.items.push({
+        productId,
+        quantity: Number(quantity) || 1,
+        variantSize: variantSize,
+        variantPrice: variant ? variant.price : undefined,
+        variantOriginalPrice: variant ? variant.originalPrice : undefined
+      });
+    }
 
     await cart.save();
 
@@ -406,13 +475,20 @@ app.put('/api/cart/item/:productId', async (req, res) => {
   try {
     const quantity = Number(req.body.quantity);
     const { productId } = req.params;
+    const { variantSize } = req.body; // Optional: to identify specific variant item
     const cart = await getCart();
-    const item = cart.items.find((i) => i.productId === productId);
+
+    // Find item by productId AND variantSize (if provided, else first match or error?)
+    // Simpler approach: find item that matches. 
+    // Limitation here: if multiple variants of same product exist, we need variantSize to identify which to update.
+    // For now, let's assume UI passes the correct variantSize/Id logic or we just find matching.
+
+    const item = cart.items.find((i) => i.productId === productId && i.variantSize === variantSize);
 
     if (!item) return res.status(404).json({ message: 'Cart item not found' });
 
     if (quantity <= 0) {
-      cart.items = cart.items.filter((i) => i.productId !== productId);
+      cart.items = cart.items.filter((i) => !(i.productId === productId && i.variantSize === variantSize));
     } else {
       item.quantity = quantity;
     }
@@ -444,7 +520,7 @@ app.get('/api/orders', async (req, res) => {
     if (phone) {
       query = { phone: { $regex: phone, $options: 'i' } };
     }
-    const orders = await Order.find(query).sort({ createdAt: -1 }).limit(50).lean();
+    const orders = await Order.find(query).sort({ createdAt: -1 }).limit(500).lean();
     res.json(orders);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -606,8 +682,10 @@ app.get('/api/reports/export', async (req, res) => {
   const range = req.query.range || 'daily';
   const format = (req.query.format || '').toLowerCase();
 
-  // Potential optimization: Filter by query date range
-  const orders = await Order.find();
+  // Filter: Only count COD or Paid/Screenshot UPI orders
+  const orders = (await Order.find()).filter(o => {
+    return o.paymentMethod === 'cod' || o.isPaid || !!o.paymentScreenshot;
+  });
 
   const productSales = summarizeProductSales(orders);
   const totalProductRevenue = productSales.reduce((acc, curr) => acc + curr.revenue, 0);
@@ -841,6 +919,7 @@ app.put('/api/settings', async (req, res) => {
     if (req.body.whatsappNumber !== undefined) settings.whatsappNumber = req.body.whatsappNumber;
     if (req.body.logoUrl !== undefined) settings.logoUrl = req.body.logoUrl;
     if (req.body.reportUrl !== undefined) settings.reportUrl = req.body.reportUrl;
+    if (req.body.storeName !== undefined) settings.storeName = req.body.storeName;
 
     await settings.save();
     res.json(settings);
