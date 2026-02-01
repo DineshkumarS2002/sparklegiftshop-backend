@@ -705,7 +705,13 @@ app.get('/api/reports/export', async (req, res) => {
     doc.fontSize(22).font('Helvetica-Bold').text('Sparkle Gift Shop', { align: 'center' });
     doc.fontSize(14).text('Sales & Collection Report', { align: 'center' });
     doc.moveDown(0.5);
-    doc.fontSize(10).fillColor('#64748b').text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
+
+    // Manual IST Calculation (GMT+5:30)
+    const now = new Date();
+    const ist = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+    const timeStr = `${ist.getUTCDate()}/${ist.getUTCMonth() + 1}/${ist.getUTCFullYear()}, ${ist.getUTCHours() % 12 || 12}:${String(ist.getUTCMinutes()).padStart(2, '0')}:${String(ist.getUTCSeconds()).padStart(2, '0')} ${ist.getUTCHours() >= 12 ? 'PM' : 'AM'}`;
+
+    doc.fontSize(10).fillColor('#64748b').text(`Generated on: ${timeStr} IST`, { align: 'center' });
     doc.fillColor('#0f172a');
     doc.moveDown(1.5);
 
@@ -718,7 +724,7 @@ app.get('/api/reports/export', async (req, res) => {
     doc.font('Helvetica-Bold').fontSize(11);
     doc.text('Product Name', col1, doc.y);
     doc.text('Sold Qty', col2, doc.y);
-    doc.text('Amount (₹)', col3, doc.y);
+    doc.text('Amount (Rs.)', col3, doc.y);
     doc.moveDown(0.5);
     doc.moveTo(startX, doc.y).lineTo(550, doc.y).strokeColor('#e2e8f0').stroke();
     doc.moveDown(0.5);
@@ -744,7 +750,7 @@ app.get('/api/reports/export', async (req, res) => {
         doc.font('Helvetica-Bold').fontSize(11);
         doc.text('Product Name', col1, y);
         doc.text('Sold Qty', col2, y);
-        doc.text('Amount (₹)', col3, y);
+        doc.text('Amount (Rs.)', col3, y);
         doc.moveDown(0.5);
         y += 20;
         doc.font('Helvetica').fontSize(10);
@@ -762,20 +768,20 @@ app.get('/api/reports/export', async (req, res) => {
 
     doc.font('Helvetica').fontSize(11);
     doc.text('Total Product Revenue:', startX + 250, doc.y, { continued: true });
-    doc.text(` ₹${totalProductRevenue.toFixed(2)}`, { align: 'right' });
+    doc.text(` Rs.${totalProductRevenue.toFixed(2)}`, { align: 'right' });
 
     doc.text('Total Delivery Fees:', startX + 250, doc.y, { continued: true });
-    doc.text(` +₹${totalDeliveryFees.toFixed(2)}`, { align: 'right' });
+    doc.text(` +Rs.${totalDeliveryFees.toFixed(2)}`, { align: 'right' });
 
     if (totalDiscounts > 0) {
       doc.text('Total Discounts Given:', startX + 250, doc.y, { continued: true });
-      doc.text(` -₹${totalDiscounts.toFixed(2)}`, { align: 'right', color: 'red' });
+      doc.text(` -Rs.${totalDiscounts.toFixed(2)}`, { align: 'right', color: 'red' });
     }
 
     doc.moveDown(0.5);
     doc.font('Helvetica-Bold').fontSize(14).fillColor('#d946ef');
     doc.text('Net Collection:', startX + 250, doc.y, { continued: true });
-    doc.text(` ₹${netCollection.toFixed(2)}`, { align: 'right' });
+    doc.text(` Rs.${netCollection.toFixed(2)}`, { align: 'right' });
 
     doc.end();
     return;
@@ -1006,8 +1012,14 @@ app.get('/api/orders/:id/pdf', async (req, res) => {
     });
     doc.pipe(res);
 
+    // Manual IST Calculation (GMT+5:30)
+    const orderDate = new Date(order.createdAt);
+    const istOrder = new Date(orderDate.getTime() + (5.5 * 60 * 60 * 1000));
     const now = new Date();
-    const currentTime = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const istNow = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+
+    const formattedDate = `${istOrder.getUTCDate()}/${istOrder.getUTCMonth() + 1}/${istOrder.getUTCFullYear()}`;
+    const formattedTime = `${istNow.getUTCHours() % 12 || 12}:${String(istNow.getUTCMinutes()).padStart(2, '0')} ${istNow.getUTCHours() >= 12 ? 'PM' : 'AM'}`;
 
     // Background Image or Color (Optional light background)
     doc.rect(0, 0, 864, 576).fill('#ffffff');
@@ -1033,8 +1045,8 @@ app.get('/api/orders/:id/pdf', async (req, res) => {
     doc.fontSize(10).font('Helvetica');
     const invoiceMetaY = 80;
     doc.text(`Invoice #: ${order.invoiceId}`, 600, invoiceMetaY, { align: 'right', width: 224 });
-    doc.text(`Date: ${new Date(order.createdAt).toLocaleDateString()}`, 600, invoiceMetaY + 15, { align: 'right', width: 224 });
-    doc.text(`Time: ${currentTime}`, 600, invoiceMetaY + 30, { align: 'right', width: 224 });
+    doc.text(`Date: ${formattedDate}`, 600, invoiceMetaY + 15, { align: 'right', width: 224 });
+    doc.text(`Time: ${formattedTime}`, 600, invoiceMetaY + 30, { align: 'right', width: 224 });
 
     // === CUSTOMER & PAYMENT INFO ===
     const sectionY = 140;
