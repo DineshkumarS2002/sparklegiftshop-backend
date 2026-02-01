@@ -18,6 +18,31 @@ const PORT = process.env.PORT || 4000;
 const WHATSAPP_NUMBER = process.env.WHATSAPP_NUMBER || '1234567890';
 
 const app = express();
+const http = require('http');
+const { Server } = require('socket.io');
+
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST", "PATCH"]
+  }
+});
+
+// Attach io to app to use in routes
+app.set('io', io);
+
+io.on('connection', (socket) => {
+  socket.on('join_order', (orderId) => {
+    socket.join(`order_${orderId}`);
+    console.log(`Socket ${socket.id} joined room: order_${orderId}`);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+  });
+});
+
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
@@ -593,6 +618,35 @@ app.patch('/api/orders/:id/payment', async (req, res) => {
   }
 });
 
+app.patch('/api/orders/:id/tracking', async (req, res) => {
+  try {
+    const { courierPartner, trackingId, message, location } = req.body;
+    const order = await Order.findOne({ id: req.params.id });
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    if (courierPartner !== undefined) order.courierPartner = courierPartner;
+    if (trackingId !== undefined) order.trackingId = trackingId;
+
+    if (message || location) {
+      order.trackingEvents.push({
+        message: message || 'Status updated',
+        location: location || '',
+        updatedAt: new Date()
+      });
+    }
+
+    await order.save();
+
+    // Real-time update via socket
+    const io = req.app.get('io');
+    io.to(`order_${order.id}`).emit('tracking_update', order);
+
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 app.post('/api/orders', async (req, res) => {
   try {
     const { items: bodyItems, customerName, phone, address, paymentMethod, couponCode, note } =
@@ -1161,7 +1215,7 @@ app.use((err, _req, res, _next) => {
 });
 
 ensureSeed().then(() => {
-  app.listen(PORT, () => {
+  server.listen(PORT, () => {
     console.log(`API ready on port ${PORT}`);
   });
 });

@@ -27,7 +27,18 @@ const orderSchema = new mongoose.Schema({
     dispatched: { type: Boolean, default: false },
     isPaid: { type: Boolean, default: false },
     paymentScreenshot: { type: String, default: '' },
-    note: { type: String, default: '' }
+    note: { type: String, default: '' },
+
+    // Tracking Fields
+    courierPartner: { type: String, default: '' },
+    trackingId: { type: String, default: '' },
+    trackingEvents: [
+        {
+            message: String,
+            location: String,
+            updatedAt: { type: Date, default: Date.now }
+        }
+    ]
 });
 
 module.exports = mongoose.model('Order', orderSchema);
