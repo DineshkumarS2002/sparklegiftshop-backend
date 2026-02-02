@@ -6,6 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const PDFDocument = require('pdfkit');
 const ExcelJS = require('exceljs');
 const connectDB = require('./db');
+const crypto = require('crypto');
 
 // Models
 const Product = require('./models/Product');
@@ -13,6 +14,18 @@ const Order = require('./models/Order');
 const Cart = require('./models/Cart');
 const Settings = require('./models/Settings');
 const Coupon = require('./models/Coupon');
+const User = require('./models/User');
+const jwt = require('jsonwebtoken');
+const {
+  sendWelcomeEmail,
+  sendOrderConfirmation,
+  sendTrackingEmail,
+  sendDeliveryConfirmation,
+  sendVerificationEmail,
+  sendResetPasswordEmail
+} = require('./utils/mail');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'your_secret_key_change_this';
 
 const PORT = process.env.PORT || 4000;
 const WHATSAPP_NUMBER = process.env.WHATSAPP_NUMBER || '1234567890';
@@ -32,10 +45,43 @@ const io = new Server(server, {
 // Attach io to app to use in routes
 app.set('io', io);
 
+// Socket Auth Middleware (Optional for Guests)
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+  if (!token) {
+    socket.user = { role: 'guest' };
+    return next();
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) {
+      socket.user = { role: 'guest' };
+      return next();
+    }
+    socket.user = decoded;
+    next();
+  });
+});
+
 io.on('connection', (socket) => {
-  socket.on('join_order', (orderId) => {
-    socket.join(`order_${orderId}`);
-    console.log(`Socket ${socket.id} joined room: order_${orderId}`);
+  const userId = socket.user?.id;
+  const role = socket.user?.role;
+
+  if (role === 'user' && userId) {
+    socket.join(`user_${userId}`);
+    console.log(`Socket ${socket.id} (User: ${userId}) joined private room`);
+  } else if (role === 'admin') {
+    console.log(`Socket ${socket.id} (Admin: ${userId}) connected`);
+  } else {
+    console.log(`Socket ${socket.id} (Guest) connected`);
+  }
+
+  // Join specific order room for real-time updates (Guests & Users)
+  socket.on('join_order', (invoiceId) => {
+    if (invoiceId) {
+      socket.join(`order_${invoiceId}`);
+      console.log(`Socket ${socket.id} joined room: order_${invoiceId}`);
+    }
   });
 
   socket.on('disconnect', () => {
@@ -52,6 +98,215 @@ app.get('/', (req, res) => res.send('Sparkle Gift Shop API is running...'));
 
 // Connect to MongoDB
 connectDB();
+
+// JWT Middleware
+const authenticate = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    res.status(401).json({ message: 'Token invalid' });
+  }
+};
+
+const isAdmin = (req, res, next) => {
+  if (req.user && req.user.role === 'admin') {
+    next();
+  } else {
+    res.status(403).json({ message: 'Admin access required' });
+  }
+};
+
+const userOnlyMiddleware = (req, res, next) => {
+  if (req.user && req.user.role === 'user') {
+    next();
+  } else {
+    res.status(403).json({ message: 'User access required' });
+  }
+};
+
+const adminOnlyMiddleware = (req, res, next) => {
+  if (req.user && req.user.role === 'admin') {
+    next();
+  } else {
+    res.status(403).json({ message: 'Admin access required' });
+  }
+};
+
+const superAdminOnlyMiddleware = (req, res, next) => {
+  if (req.user && req.user.role === 'admin' && req.user.adminLevel === 'super_admin') {
+    next();
+  } else {
+    res.status(403).json({ message: 'Super Admin access required' });
+  }
+};
+
+// --- AUTH ROUTES ---
+
+// Client Signup
+app.post('/api/auth/client/signup', async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    const existing = await User.findOne({ email: email.toLowerCase() });
+    if (existing) return res.status(400).json({ message: 'This email is already registered.' });
+
+    const user = new User({
+      name,
+      email: email.toLowerCase(),
+      password,
+      role: 'user',
+      isEmailVerified: true
+    });
+
+    await user.save();
+    res.status(201).json({ message: 'Signup successful! You can login now.', autoVerified: true });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Client Login
+app.post('/api/auth/client/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email: email.toLowerCase() });
+
+    if (!user || user.role !== 'user' || !(await user.comparePassword(password))) {
+      return res.status(401).json({ message: 'Invalid credentials or account type' });
+    }
+
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({ token, user: { id: user._id, name: user.name, email: user.email, role: user.role } });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Admin Login
+app.post('/api/auth/admin/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email: email.toLowerCase() });
+
+    if (!user || user.role !== 'admin' || !(await user.comparePassword(password))) {
+      return res.status(401).json({ message: 'Invalid admin credentials' });
+    }
+
+    const token = jwt.sign(
+      { id: user._id, role: user.role, adminLevel: user.adminLevel },
+      JWT_SECRET,
+      { expiresIn: '1d' }
+    );
+
+    res.json({ token, user: { id: user._id, name: user.name, email: user.email, role: user.role, adminLevel: user.adminLevel } });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Admin Signup (Public)
+app.post('/api/auth/admin/signup', async (req, res) => {
+  try {
+    const { name, email, password, adminLevel } = req.body;
+    const existing = await User.findOne({ email: email.toLowerCase() });
+    if (existing) return res.status(400).json({ message: 'This email is already registered.' });
+
+    const user = new User({
+      name,
+      email: email.toLowerCase(),
+      password,
+      role: 'admin',
+      adminLevel: adminLevel || 'admin',
+      isEmailVerified: true
+    });
+
+    await user.save();
+    res.status(201).json({ message: 'Admin account created successfully! You can login now.', autoVerified: true });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Reset Password (Common Logic)
+const handleResetPassword = async (req, res) => {
+  try {
+    const { token, password } = req.body;
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: Date.now() }
+    });
+
+    if (!user) return res.status(400).json({ message: 'Invalid or expired reset token' });
+
+    user.password = password;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    await user.save();
+
+    res.json({ message: 'Password has been reset successfully' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+app.post('/api/auth/client/reset-password', handleResetPassword);
+app.post('/api/auth/admin/reset-password', handleResetPassword);
+
+// Protected route to create admins (only by super_admins)
+app.post('/api/admin/create-admin', authenticate, superAdminOnlyMiddleware, async (req, res) => {
+  try {
+    const { name, email, password, adminLevel } = req.body;
+    const existing = await User.findOne({ email });
+    if (existing) return res.status(400).json({ message: 'User already exists' });
+
+    const user = new User({
+      name,
+      email,
+      password,
+      role: 'admin',
+      adminLevel: adminLevel || 'admin',
+      isEmailVerified: true // Admins created by super admin are verified
+    });
+    await user.save();
+    res.status(201).json({ message: 'Admin created successfully', user: { id: user._id, name, email, role: 'admin', adminLevel: user.adminLevel } });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// List Admins
+app.get('/api/admin/users', authenticate, isAdmin, async (req, res) => {
+  try {
+    const users = await User.find({ role: 'admin' }).select('-password');
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Delete Admin
+app.delete('/api/admin/users/:id', authenticate, superAdminOnlyMiddleware, async (req, res) => {
+  try {
+    if (req.params.id === req.user.id) {
+      return res.status(400).json({ message: 'You cannot delete yourself' });
+    }
+    await User.findByIdAndDelete(req.params.id);
+    res.status(204).end();
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
 
 const seedProducts = [
   {
@@ -219,11 +474,11 @@ async function ensureSeed() {
 
 }
 
-async function getCart() {
-  // Singleton cart logic
-  let cart = await Cart.findOne();
+async function getCart(userId) {
+  if (!userId) return null;
+  let cart = await Cart.findOne({ user: userId });
   if (!cart) {
-    cart = await Cart.create({ items: [] });
+    cart = await Cart.create({ user: userId, items: [] });
   }
   return cart;
 }
@@ -272,6 +527,7 @@ function withProductDetails(cartItems, products) {
         productId: item.productId,
         quantity: item.quantity,
         variantSize: item.variantSize,
+        variantColor: item.variantColor,
         variantPrice: item.variantPrice,
         product,
         lineTotal
@@ -368,7 +624,7 @@ app.get('/api/products', async (_req, res) => {
   }
 });
 
-app.post('/api/products', async (req, res) => {
+app.post('/api/admin/products', authenticate, isAdmin, async (req, res) => {
   try {
     const { name, price, category, image, description, variants } = req.body;
     if (!name || !price) {
@@ -398,7 +654,7 @@ app.post('/api/products', async (req, res) => {
   }
 });
 
-app.put('/api/products/:id', async (req, res) => {
+app.put('/api/admin/products/:id', authenticate, isAdmin, async (req, res) => {
   try {
     const product = await Product.findOne({ id: req.params.id });
     if (!product) return res.status(404).json({ message: 'Product not found' });
@@ -413,7 +669,7 @@ app.put('/api/products/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/products/:id', async (req, res) => {
+app.delete('/api/admin/products/:id', authenticate, isAdmin, async (req, res) => {
   try {
     const result = await Product.deleteOne({ id: req.params.id });
     if (result.deletedCount === 0) return res.status(404).json({ message: 'Product not found' });
@@ -441,6 +697,7 @@ async function getProductsForCart(cartItems) {
       productId: item.productId,
       quantity: item.quantity,
       variantSize: item.variantSize,
+      variantColor: item.variantColor,
       variantPrice: item.variantPrice,
       product,
       lineTotal
@@ -451,9 +708,9 @@ async function getProductsForCart(cartItems) {
   return { items, subtotal, total: subtotal };
 }
 
-app.get('/api/cart', async (_req, res) => {
+app.get('/api/cart', authenticate, async (req, res) => {
   try {
-    const cart = await getCart();
+    const cart = await getCart(req.user.id);
     const result = await getProductsForCart(cart.items);
     res.json(result);
   } catch (err) {
@@ -461,18 +718,19 @@ app.get('/api/cart', async (_req, res) => {
   }
 });
 
-app.post('/api/cart/add', async (req, res) => {
+app.post('/api/cart/add', authenticate, async (req, res) => {
   try {
     const { productId, quantity = 1, variant } = req.body;
     const product = await Product.findOne({ id: productId }).select('id price name').lean();
     if (!product) return res.status(404).json({ message: 'Product not found' });
 
-    const cart = await getCart();
+    const cart = await getCart(req.user.id);
     // Check if item with same product AND same variant exists
     const variantSize = variant ? variant.size : null;
+    const variantColor = variant ? variant.color : null;
 
     const existing = cart.items.find((item) =>
-      item.productId === productId && item.variantSize === variantSize
+      item.productId === productId && item.variantSize === variantSize && item.variantColor === variantColor
     );
 
     if (existing) {
@@ -482,6 +740,7 @@ app.post('/api/cart/add', async (req, res) => {
         productId,
         quantity: Number(quantity) || 1,
         variantSize: variantSize,
+        variantColor: variantColor,
         variantPrice: variant ? variant.price : undefined,
         variantOriginalPrice: variant ? variant.originalPrice : undefined
       });
@@ -496,24 +755,30 @@ app.post('/api/cart/add', async (req, res) => {
   }
 });
 
-app.put('/api/cart/item/:productId', async (req, res) => {
+app.put('/api/cart/item/:productId', authenticate, async (req, res) => {
   try {
     const quantity = Number(req.body.quantity);
     const { productId } = req.params;
-    const { variantSize } = req.body; // Optional: to identify specific variant item
-    const cart = await getCart();
+    const { variantSize, variantColor } = req.body; // Optional: to identify specific variant item
+    const cart = await getCart(req.user.id);
 
     // Find item by productId AND variantSize (if provided, else first match or error?)
     // Simpler approach: find item that matches. 
     // Limitation here: if multiple variants of same product exist, we need variantSize to identify which to update.
     // For now, let's assume UI passes the correct variantSize/Id logic or we just find matching.
 
-    const item = cart.items.find((i) => i.productId === productId && i.variantSize === variantSize);
+    const item = cart.items.find((i) =>
+      i.productId === productId &&
+      (i.variantSize || null) == (variantSize || null) &&
+      (i.variantColor || null) == (variantColor || null)
+    );
 
     if (!item) return res.status(404).json({ message: 'Cart item not found' });
 
     if (quantity <= 0) {
-      cart.items = cart.items.filter((i) => !(i.productId === productId && i.variantSize === variantSize));
+      cart.items = cart.items.filter((i) =>
+        !(i.productId === productId && (i.variantSize || null) == (variantSize || null) && (i.variantColor || null) == (variantColor || null))
+      );
     } else {
       item.quantity = quantity;
     }
@@ -526,9 +791,9 @@ app.put('/api/cart/item/:productId', async (req, res) => {
   }
 });
 
-app.post('/api/cart/clear', async (_req, res) => {
+app.post('/api/cart/clear', authenticate, async (req, res) => {
   try {
-    const cart = await getCart();
+    const cart = await getCart(req.user.id);
     cart.items = [];
     await cart.save();
     res.json({ items: [], subtotal: 0, total: 0 });
@@ -538,7 +803,16 @@ app.post('/api/cart/clear', async (_req, res) => {
 });
 
 // Orders
-app.get('/api/orders', async (req, res) => {
+app.get('/api/orders', authenticate, async (req, res) => {
+  try {
+    const orders = await Order.find({ user: req.user.id }).sort({ createdAt: -1 }).limit(500).lean();
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.get('/api/admin/orders', authenticate, isAdmin, async (req, res) => {
   try {
     const { phone } = req.query;
     let query = {};
@@ -552,7 +826,77 @@ app.get('/api/orders', async (req, res) => {
   }
 });
 
-app.get('/api/orders/:id', async (req, res) => {
+app.get('/api/orders/:id', authenticate, async (req, res) => {
+  try {
+    const order = await Order.findOne({
+      user: req.user.id,
+      $or: [{ id: req.params.id }, { invoiceId: req.params.id }]
+    });
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// NEW: Public Tracking Route (requires phone match)
+app.get('/api/public/orders/:idOrInvoiceId', async (req, res) => {
+  try {
+    const { phone } = req.query;
+    if (!phone) return res.status(400).json({ message: 'Phone number required' });
+
+    const order = await Order.findOne({
+      $or: [{ id: req.params.idOrInvoiceId }, { invoiceId: req.params.idOrInvoiceId }]
+    });
+
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    const cleanReqPhone = phone.replace(/[^0-9]/g, '').slice(-10);
+    const cleanOrderPhone = order.phone.replace(/[^0-9]/g, '').slice(-10);
+
+    if (cleanReqPhone !== cleanOrderPhone) {
+      return res.status(401).json({ message: 'Phone number mismatch' });
+    }
+
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// NEW: Public route to list orders by phone
+app.get('/api/public/orders', async (req, res) => {
+  try {
+    let { phone } = req.query;
+    if (!phone) return res.status(400).json({ message: 'Phone number required' });
+
+    const cleanPhone = phone.replace(/[^0-9]/g, '').slice(-10);
+
+    // We search for orders where the last 10 digits of the phone match
+    // Note: For large DBs, regex search on phone can be slow, but here it's fine.
+    // Better: use an indexable clean phone field, but we'll stick to a simple filter for now.
+    const allOrders = await Order.find({}).sort({ createdAt: -1 }).limit(100).lean();
+    const orders = allOrders.filter(o => {
+      const oPhone = (o.phone || '').replace(/[^0-9]/g, '').slice(-10);
+      return oPhone === cleanPhone;
+    }).map(o => ({
+      id: o.id,
+      invoiceId: o.invoiceId,
+      customerName: o.customerName,
+      total: o.total,
+      dispatched: o.dispatched,
+      delivered: o.delivered,
+      createdAt: o.createdAt,
+      phone: o.phone // Keep it so frontend can use it if needed
+    }));
+
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.get('/api/admin/orders/:id', authenticate, isAdmin, async (req, res) => {
   try {
     const order = await Order.findOne({
       $or: [{ id: req.params.id }, { invoiceId: req.params.id }]
@@ -564,10 +908,23 @@ app.get('/api/orders/:id', async (req, res) => {
   }
 });
 
-app.put('/api/orders/:id/screenshot', async (req, res) => {
+app.delete('/api/admin/orders/:id', authenticate, isAdmin, async (req, res) => {
+  try {
+    const result = await Order.deleteOne({
+      $or: [{ id: req.params.id }, { invoiceId: req.params.id }]
+    });
+    if (result.deletedCount === 0) return res.status(404).json({ message: 'Order not found' });
+    res.status(204).end();
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.put('/api/orders/:id/screenshot', authenticate, async (req, res) => {
   try {
     const { screenshot } = req.body;
     const order = await Order.findOne({
+      user: req.user.id,
       $or: [{ id: req.params.id }, { invoiceId: req.params.id }]
     });
     if (!order) return res.status(404).json({ message: 'Order not found' });
@@ -580,52 +937,123 @@ app.put('/api/orders/:id/screenshot', async (req, res) => {
   }
 });
 
-app.delete('/api/orders/:id', async (req, res) => {
-  try {
-    const result = await Order.deleteOne({
-      $or: [{ id: req.params.id }, { invoiceId: req.params.id }]
-    });
-    if (result.deletedCount === 0) return res.status(404).json({ message: 'Order not found' });
-    res.status(204).end();
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.patch('/api/orders/:id/dispatch', async (req, res) => {
+// Admin: Toggle Dispatch/Delivery
+app.patch('/api/admin/orders/:id/dispatch', authenticate, isAdmin, async (req, res) => {
   try {
     const order = await Order.findOne({ id: req.params.id });
     if (!order) return res.status(404).json({ message: 'Order not found' });
 
-    order.dispatched = req.body.dispatched !== undefined ? req.body.dispatched : !order.dispatched;
+    const isDispatched = req.body.dispatched !== undefined ? req.body.dispatched : !order.dispatched;
+
+    // Add tracking event if being marked as dispatched
+    if (isDispatched && !order.dispatched) {
+      order.trackingEvents.push({
+        message: 'Order Dispatched - In Transit 🚚',
+        location: 'Warehouse',
+        updatedAt: new Date()
+      });
+    }
+
+    order.dispatched = isDispatched;
     await order.save();
+
+    // Real-time update
+    if (order.user) {
+      io.to(`user_${order.user}`).emit('tracking_update', order);
+    }
+    io.to(`order_${order.invoiceId}`).emit('tracking_update', order);
+
     res.json(order);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.patch('/api/orders/:id/payment', async (req, res) => {
+// Admin: Toggle Payment
+app.patch('/api/admin/orders/:id/payment', authenticate, isAdmin, async (req, res) => {
   try {
     const order = await Order.findOne({ id: req.params.id });
     if (!order) return res.status(404).json({ message: 'Order not found' });
 
-    order.isPaid = req.body.isPaid !== undefined ? req.body.isPaid : !order.isPaid;
+    const isPaidNow = req.body.isPaid !== undefined ? req.body.isPaid : !order.isPaid;
+
+    if (isPaidNow && !order.isPaid) {
+      order.trackingEvents.push({
+        message: 'Payment Verified - Order Confirmed! ✅',
+        location: 'Accounts',
+        updatedAt: new Date()
+      });
+    }
+
+    order.isPaid = isPaidNow;
     await order.save();
+
+    // Notify user in real-time
+    if (order.user) {
+      io.to(`user_${order.user}`).emit('tracking_update', order);
+    }
+    io.to(`order_${order.invoiceId}`).emit('tracking_update', order);
+
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+// Toggle Delivery Status
+app.patch('/api/admin/orders/:id/delivered', authenticate, isAdmin, async (req, res) => {
+  try {
+    const { delivered } = req.body;
+    const order = await Order.findOne({ id: req.params.id });
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    order.delivered = delivered;
+
+    // Auto-add tracking event for delivery
+    if (delivered) {
+      order.trackingEvents.push({
+        message: 'Order Successfully Delivered! 🎉',
+        location: 'Customer Address',
+        updatedAt: new Date()
+      });
+      // Try to send email
+      try {
+        if (order.user) {
+          const user = await User.findById(order.user);
+          if (user && user.email) {
+            await sendDeliveryConfirmation(user.email, order);
+          }
+        }
+      } catch (e) {
+        console.error('Email failed:', e);
+      }
+    }
+
+    await order.save();
+
+    // Notify in real-time if they are connected
+    if (order.user) {
+      io.to(`user_${order.user}`).emit('tracking_update', order);
+    }
+    io.to(`order_${order.invoiceId}`).emit('tracking_update', order);
+
     res.json(order);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.patch('/api/orders/:id/tracking', async (req, res) => {
+// Admin: Update Tracking & Notify
+app.patch('/api/admin/orders/:id/tracking', authenticate, isAdmin, async (req, res) => {
   try {
-    const { courierPartner, trackingId, message, location } = req.body;
+    const { courierPartner, trackingId, message, location, status } = req.body;
     const order = await Order.findOne({ id: req.params.id });
     if (!order) return res.status(404).json({ message: 'Order not found' });
 
     if (courierPartner !== undefined) order.courierPartner = courierPartner;
     if (trackingId !== undefined) order.trackingId = trackingId;
+
+    if (status === 'delivered') order.delivered = true;
+    if (status === 'dispatched' || status === 'delivered') order.dispatched = true;
 
     if (message || location) {
       order.trackingEvents.push({
@@ -637,9 +1065,24 @@ app.patch('/api/orders/:id/tracking', async (req, res) => {
 
     await order.save();
 
-    // Real-time update via socket
-    const io = req.app.get('io');
-    io.to(`order_${order.id}`).emit('tracking_update', order);
+    // Notify in real-time (to user private room and order-specific room for guests)
+    if (order.user) {
+      io.to(`user_${order.user}`).emit('tracking_update', order);
+    }
+    io.to(`order_${order.invoiceId}`).emit('tracking_update', order);
+
+    // Find user for email
+    const user = await User.findById(order.user);
+    if (user && user.email) {
+      if (status === 'delivered') {
+        sendDeliveryConfirmation(user, order);
+      } else if (trackingId && !order.trackingEmailSent) {
+        // Only send tracking email once or when ID changes?
+        sendTrackingEmail(user, order);
+        order.trackingEmailSent = true;
+        await order.save();
+      }
+    }
 
     res.json(order);
   } catch (err) {
@@ -647,13 +1090,13 @@ app.patch('/api/orders/:id/tracking', async (req, res) => {
   }
 });
 
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', authenticate, async (req, res) => {
   try {
     const { items: bodyItems, customerName, phone, address, paymentMethod, couponCode, note } =
       req.body || {};
 
     const products = await Product.find();
-    const cart = await getCart();
+    const cart = await getCart(req.user.id);
     const coupons = await Coupon.find();
 
     const sourceItems = Array.isArray(bodyItems) && bodyItems.length ? bodyItems : cart.items;
@@ -696,6 +1139,7 @@ app.post('/api/orders', async (req, res) => {
     const invoice = await nextInvoice();
     const orderData = {
       id: `o-${uuidv4()}`,
+      user: req.user.id,
       invoiceNumber: invoice.invoiceNumber,
       invoiceSequence: invoice.invoiceSequence,
       invoiceId: invoice.invoiceId,
@@ -715,7 +1159,13 @@ app.post('/api/orders', async (req, res) => {
 
     const order = await Order.create(orderData);
 
-    // Clear cart
+    // Send order confirmation email
+    const user = await User.findById(req.user.id);
+    if (user) {
+      sendOrderConfirmation(user, order);
+    }
+
+    // Clear user cart
     cart.items = [];
     await cart.save();
 
@@ -726,13 +1176,13 @@ app.post('/api/orders', async (req, res) => {
 });
 
 // Reports
-app.get('/api/reports/summary', async (req, res) => {
+app.get('/api/admin/reports/summary', authenticate, isAdmin, async (req, res) => {
   const range = req.query.range || 'daily';
   const orders = await Order.find();
   res.json(summarizeOrders(orders, range));
 });
 
-app.get('/api/reports/export', async (req, res) => {
+app.get('/api/admin/reports/export', authenticate, isAdmin, async (req, res) => {
   const range = req.query.range || 'daily';
   const format = (req.query.format || '').toLowerCase();
 
@@ -969,7 +1419,7 @@ app.get('/api/settings', async (_req, res) => {
   res.json(settings);
 });
 
-app.put('/api/settings', async (req, res) => {
+app.put('/api/admin/settings', authenticate, isAdmin, async (req, res) => {
   try {
     let settings = await Settings.findOne();
     if (!settings) settings = new Settings();
@@ -990,11 +1440,20 @@ app.put('/api/settings', async (req, res) => {
 
 // Coupons
 app.get('/api/coupons', async (_req, res) => {
+  try {
+    const coupons = await Coupon.find();
+    res.json(coupons);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.get('/api/admin/coupons', authenticate, isAdmin, async (_req, res) => {
   const coupons = await Coupon.find();
   res.json(coupons);
 });
 
-app.post('/api/coupons', async (req, res) => {
+app.post('/api/admin/coupons', authenticate, isAdmin, async (req, res) => {
   try {
     const { code, type, value, applicableTo, productIds } = req.body;
     if (!code || !value) {
@@ -1022,7 +1481,7 @@ app.post('/api/coupons', async (req, res) => {
   }
 });
 
-app.delete('/api/coupons/:id', async (req, res) => {
+app.delete('/api/admin/coupons/:id', authenticate, isAdmin, async (req, res) => {
   try {
     const result = await Coupon.deleteOne({ id: req.params.id });
     if (result.deletedCount === 0) return res.status(404).json({ message: 'Coupon not found' });

@@ -9,7 +9,8 @@ const productSchema = new mongoose.Schema({
     image: { type: String, default: '' },
     description: { type: String, default: '' },
     variants: [{
-        size: { type: String, required: true }, // e.g., "12x8", "10x15"
+        size: { type: String, default: '' }, // e.g., "12x8", "10x15"
+        color: { type: String, default: '' }, // e.g., "#ff0000" or "Red"
         price: { type: Number, required: true },
         originalPrice: { type: Number },
         image: { type: String } // Optional: specific image for this variant
