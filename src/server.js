@@ -16,14 +16,6 @@ const Settings = require('./models/Settings');
 const Coupon = require('./models/Coupon');
 const User = require('./models/User');
 const jwt = require('jsonwebtoken');
-const {
-  sendWelcomeEmail,
-  sendOrderConfirmation,
-  sendTrackingEmail,
-  sendDeliveryConfirmation,
-  sendVerificationEmail,
-  sendResetPasswordEmail
-} = require('./utils/mail');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_secret_key_change_this';
 
@@ -85,7 +77,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+    // disconnected
   });
 });
 
@@ -295,6 +287,33 @@ app.get('/api/admin/users', authenticate, isAdmin, async (req, res) => {
   }
 });
 
+// List Customers
+app.get('/api/admin/customers', authenticate, isAdmin, async (req, res) => {
+  try {
+    const customers = await User.find({ role: 'user' }).select('-password');
+    res.json(customers);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Admin: Generate Customer Password Reset Token
+app.post('/api/admin/customers/:id/reset-token', authenticate, isAdmin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const token = crypto.randomBytes(32).toString('hex');
+    user.resetPasswordToken = token;
+    user.resetPasswordExpires = Date.now() + 3600000 * 24; // 24 hours
+    await user.save();
+
+    res.json({ token, message: 'Reset token generated successfully' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // Delete Admin
 app.delete('/api/admin/users/:id', authenticate, superAdminOnlyMiddleware, async (req, res) => {
   try {
@@ -308,171 +327,7 @@ app.delete('/api/admin/users/:id', authenticate, superAdminOnlyMiddleware, async
   }
 });
 
-const seedProducts = [
-  {
-    id: 'pf-001',
-    name: 'Classic Photo Frame',
-    price: 299,
-    category: 'Photo Frames',
-    image: 'https://images.unsplash.com/photo-1523419400524-1d25ae3ca7c0?auto=format&fit=crop&w=600&q=80',
-    description: 'Elegant wooden photo frame for 5x7 photos.',
-  },
-  {
-    id: 'cm-001',
-    name: 'Custom Coffee Mug',
-    price: 249,
-    category: 'Coffee Mugs',
-    image: 'https://images.unsplash.com/photo-1462917882517-e150004895fa?auto=format&fit=crop&w=600&q=80',
-    description: 'Ceramic mug with your photo printed.',
-  },
-  {
-    id: 'cm-002',
-    name: 'Hidden Photo Mug',
-    price: 399,
-    category: 'Coffee Mugs',
-    image: 'https://images.unsplash.com/photo-1504753793650-d4a2b783c15e?auto=format&fit=crop&w=600&q=80',
-    description: 'Heat reveal mug showing a hidden photo.',
-  },
-  {
-    id: 'll-001',
-    name: 'Custom Light Lamp',
-    price: 899,
-    category: 'Lamps',
-    image: 'https://images.unsplash.com/photo-1493663284031-b7e3aefcae8e?auto=format&fit=crop&w=600&q=80',
-    description: 'Personalized night lamp with etched image.',
-  },
-  {
-    id: 'hp-001',
-    name: 'Heart Pillow',
-    price: 599,
-    category: 'Pillows',
-    image: 'https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?auto=format&fit=crop&w=600&q=80',
-    description: 'Soft heart pillow printed with your photo.',
-  },
-  {
-    id: 'pl-001',
-    name: 'Photo Lamp Cube',
-    price: 1199,
-    category: 'Lamps',
-    image: 'https://images.unsplash.com/photo-1473186578172-c141e6798cf4?auto=format&fit=crop&w=600&q=80',
-    description: 'Cube lamp that showcases multiple photos.',
-  },
-  {
-    id: 'pf-002',
-    name: 'Collage Photo Frame (8 Photos)',
-    price: 749,
-    category: 'Photo Frames',
-    image: 'https://images.unsplash.com/photo-1452800185063-6db5e12b8e2e?auto=format&fit=crop&w=600&q=80',
-    description: 'Wall collage frame for 8 small photos.',
-  },
-  {
-    id: 'mg-001',
-    name: 'Magic Mirror Photo Frame',
-    price: 1399,
-    category: 'Photo Frames',
-    image: 'https://images.unsplash.com/photo-1519710887729-8e3f2c0f742c?auto=format&fit=crop&w=600&q=80',
-    description: 'LED magic mirror frame with custom photo.',
-  },
-  {
-    id: 'cm-003',
-    name: 'Couple Name Mug Set (2)',
-    price: 499,
-    category: 'Coffee Mugs',
-    image: 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&fit=crop&w=600&q=80',
-    description: 'Two mugs printed with names & date.',
-  },
-  {
-    id: 'ks-001',
-    name: 'Photo Keychain (Acrylic)',
-    price: 149,
-    category: 'Keychains',
-    image: 'https://images.unsplash.com/photo-1591035897819-f4bdf739f446?auto=format&fit=crop&w=600&q=80',
-    description: 'Pocket-size acrylic photo keychain.',
-  },
-  {
-    id: 'pl-002',
-    name: '3D Photo Lamp (Moon)',
-    price: 1299,
-    category: 'Lamps',
-    image: 'https://images.unsplash.com/photo-1519710164239-da123dc03ef4?auto=format&fit=crop&w=600&q=80',
-    description: '3D moon lamp with custom name/photo stand.',
-  },
-  {
-    id: 'ph-001',
-    name: 'Heart Photo Pillow (Premium)',
-    price: 799,
-    category: 'Pillows',
-    image: 'https://images.unsplash.com/photo-1526481280695-3c687fd643ed?auto=format&fit=crop&w=600&q=80',
-    description: 'Premium fabric heart pillow with HD print.',
-  },
-  {
-    id: 'cb-001',
-    name: 'Customized Chocolate Box',
-    price: 699,
-    category: 'Gift Boxes',
-    image: 'https://images.unsplash.com/photo-1511381939415-e44015466834?auto=format&fit=crop&w=600&q=80',
-    description: 'Gift box with name label and chocolates.',
-  },
-  {
-    id: 'bd-001',
-    name: 'Birthday Photo Banner',
-    price: 349,
-    category: 'Decor',
-    image: 'https://images.unsplash.com/photo-1513151233558-d860c5398176?auto=format&fit=crop&w=600&q=80',
-    description: 'Custom birthday banner with photos.',
-  },
-];
-
-async function ensureSeed() {
-  const count = await Product.countDocuments();
-  if (count === 0) {
-    await Product.insertMany(seedProducts);
-    console.log('Seeded products');
-  }
-
-  // Ensure initial settings
-  const settingsCount = await Settings.countDocuments();
-  if (settingsCount === 0) {
-    const defaultSettings = {
-      upiQrUrl: 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=Gift%20Shop%20Payment',
-      whatsappNumber: WHATSAPP_NUMBER,
-      lastInvoiceNumber: 0,
-      reportUrl: 'https://docs.google.com/spreadsheets/d/1LYhiIzuFm1FHrxEVl1aHczda5XyQABozK8rpfGFc6XE/edit?gid=0#gid=0'
-    };
-    await Settings.create(defaultSettings);
-    console.log('Seeded settings');
-  }
-
-  // Migration: Update old UUID-style IDs to the new format for consistency
-  const allProducts = await Product.find({ id: /^p-/ });
-  for (const p of allProducts) {
-    const cleanName = p.name.trim().split(' ')[0].replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, 5);
-    const existingProductsWithPrefix = await Product.find({ id: new RegExp(`^${cleanName}`) });
-    const nextNum = existingProductsWithPrefix.length + 1;
-    const newId = `${cleanName}-${String(nextNum).padStart(3, '0')}`;
-
-    const oldId = p.id;
-    console.log(`Migrating ID: ${oldId} -> ${newId}`);
-
-    // Update the product itself
-    await Product.updateOne({ _id: p._id }, { $set: { id: newId } });
-
-    // Update references in Orders (Array update)
-    await Order.updateMany(
-      { "items.productId": oldId },
-      { $set: { "items.$[elem].productId": newId } },
-      { arrayFilters: [{ "elem.productId": oldId }] }
-    );
-
-    // Update references in Carts (Array update)
-    await Cart.updateMany(
-      { "items.productId": oldId },
-      { $set: { "items.$[elem].productId": newId } },
-      { arrayFilters: [{ "elem.productId": oldId }] }
-    );
-  }
-
-}
+// --- REFRESHED BACKEND ---
 
 async function getCart(userId) {
   if (!userId) return null;
@@ -1015,17 +870,6 @@ app.patch('/api/admin/orders/:id/delivered', authenticate, isAdmin, async (req, 
         location: 'Customer Address',
         updatedAt: new Date()
       });
-      // Try to send email
-      try {
-        if (order.user) {
-          const user = await User.findById(order.user);
-          if (user && user.email) {
-            await sendDeliveryConfirmation(user.email, order);
-          }
-        }
-      } catch (e) {
-        console.error('Email failed:', e);
-      }
     }
 
     await order.save();
@@ -1070,19 +914,6 @@ app.patch('/api/admin/orders/:id/tracking', authenticate, isAdmin, async (req, r
       io.to(`user_${order.user}`).emit('tracking_update', order);
     }
     io.to(`order_${order.invoiceId}`).emit('tracking_update', order);
-
-    // Find user for email
-    const user = await User.findById(order.user);
-    if (user && user.email) {
-      if (status === 'delivered') {
-        sendDeliveryConfirmation(user, order);
-      } else if (trackingId && !order.trackingEmailSent) {
-        // Only send tracking email once or when ID changes?
-        sendTrackingEmail(user, order);
-        order.trackingEmailSent = true;
-        await order.save();
-      }
-    }
 
     res.json(order);
   } catch (err) {
@@ -1158,12 +989,6 @@ app.post('/api/orders', authenticate, async (req, res) => {
     };
 
     const order = await Order.create(orderData);
-
-    // Send order confirmation email
-    const user = await User.findById(req.user.id);
-    if (user) {
-      sendOrderConfirmation(user, order);
-    }
 
     // Clear user cart
     cart.items = [];
@@ -1673,8 +1498,6 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ message: 'Internal server error' });
 });
 
-ensureSeed().then(() => {
-  server.listen(PORT, () => {
-    console.log(`API ready on port ${PORT}`);
-  });
+server.listen(PORT, () => {
+  // Ready
 });
