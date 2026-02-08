@@ -472,7 +472,10 @@ app.get('/api/health', (_req, res) => {
 // Products CRUD
 app.get('/api/products', async (_req, res) => {
   try {
-    const products = await Product.find();
+    // Optimization: Use .lean() for faster read-only access
+    // Also select only necessary fields to reduce payload size if possible, 
+    // but client seems to use all fields. So just .lean() is a big win.
+    const products = await Product.find().lean();
     res.json(products);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -499,10 +502,13 @@ app.post('/api/admin/products', authenticate, isAdmin, async (req, res) => {
       category: category || 'General',
       image: image || '',
       description: description || '',
-      variants: variants || []
+      variants: variants || [],
+      isCombo: req.body.isCombo || false,
+      comboItems: req.body.comboItems || []
     });
 
     await newProduct.save();
+    io.emit('products_updated', { action: 'create', product: newProduct });
     res.status(201).json(newProduct);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -518,6 +524,7 @@ app.put('/api/admin/products/:id', authenticate, isAdmin, async (req, res) => {
     if (req.body.price) product.price = Number(req.body.price);
 
     await product.save();
+    io.emit('products_updated', { action: 'update', product });
     res.json(product);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -528,6 +535,7 @@ app.delete('/api/admin/products/:id', authenticate, isAdmin, async (req, res) =>
   try {
     const result = await Product.deleteOne({ id: req.params.id });
     if (result.deletedCount === 0) return res.status(404).json({ message: 'Product not found' });
+    io.emit('products_updated', { action: 'delete', id: req.params.id });
     res.status(204).end();
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -544,7 +552,14 @@ async function getProductsForCart(cartItems) {
   const productMap = new Map(products.map(p => [p.id, p]));
 
   const items = cartItems.map(item => {
-    const product = item.product || productMap.get(item.productId);
+    let product = item.product || productMap.get(item.productId);
+    if (product) {
+      const master = productMap.get(item.productId);
+      if (master) {
+        // ensure combo info is present from master if missing in snapshot
+        product = { ...product, isCombo: master.isCombo, comboItems: master.comboItems };
+      }
+    }
     if (!product) return null;
     const price = item.variantPrice || product.price;
     const lineTotal = +(price * item.quantity).toFixed(2);
@@ -576,7 +591,7 @@ app.get('/api/cart', authenticate, async (req, res) => {
 app.post('/api/cart/add', authenticate, async (req, res) => {
   try {
     const { productId, quantity = 1, variant } = req.body;
-    const product = await Product.findOne({ id: productId }).select('id price name').lean();
+    const product = await Product.findOne({ id: productId }).select('id price name isCombo comboItems').lean();
     if (!product) return res.status(404).json({ message: 'Product not found' });
 
     const cart = await getCart(req.user.id);
@@ -622,10 +637,12 @@ app.put('/api/cart/item/:productId', authenticate, async (req, res) => {
     // Limitation here: if multiple variants of same product exist, we need variantSize to identify which to update.
     // For now, let's assume UI passes the correct variantSize/Id logic or we just find matching.
 
+    const normalize = (v) => v ? String(v).trim() : '';
+
     const item = cart.items.find((i) =>
       i.productId === productId &&
-      (i.variantSize || null) == (variantSize || null) &&
-      (i.variantColor || null) == (variantColor || null)
+      normalize(i.variantSize) === normalize(variantSize) &&
+      normalize(i.variantColor) === normalize(variantColor)
     );
 
     if (!item) return res.status(404).json({ message: 'Cart item not found' });
@@ -720,30 +737,29 @@ app.get('/api/public/orders/:idOrInvoiceId', async (req, res) => {
 });
 
 // NEW: Public route to list orders by phone
+// NEW: Public route to list orders by phone
 app.get('/api/public/orders', async (req, res) => {
   try {
     let { phone } = req.query;
     if (!phone) return res.status(400).json({ message: 'Phone number required' });
 
-    const cleanPhone = phone.replace(/[^0-9]/g, '').slice(-10);
+    // Sanitize phone: remove non-digits
+    const cleanPhone = phone.replace(/[^0-9]/g, '');
 
-    // We search for orders where the last 10 digits of the phone match
-    // Note: For large DBs, regex search on phone can be slow, but here it's fine.
-    // Better: use an indexable clean phone field, but we'll stick to a simple filter for now.
-    const allOrders = await Order.find({}).sort({ createdAt: -1 }).limit(100).lean();
-    const orders = allOrders.filter(o => {
-      const oPhone = (o.phone || '').replace(/[^0-9]/g, '').slice(-10);
-      return oPhone === cleanPhone;
-    }).map(o => ({
-      id: o.id,
-      invoiceId: o.invoiceId,
-      customerName: o.customerName,
-      total: o.total,
-      dispatched: o.dispatched,
-      delivered: o.delivered,
-      createdAt: o.createdAt,
-      phone: o.phone // Keep it so frontend can use it if needed
-    }));
+    // We want to match orders where the stored phone *ends with* the last 10 digits of the provided phone
+    // or exact match if less than 10 digits.
+    // Querying by regex on string field.
+    const searchString = cleanPhone.slice(-10);
+
+    // Regex to match phone numbers ending with these digits
+    // Note: escape special regex chars if any (digits are safe)
+    const phoneRegex = new RegExp(`${searchString}$`);
+
+    const orders = await Order.find({ phone: { $regex: phoneRegex } })
+      .sort({ createdAt: -1 })
+      .limit(50) // Limit to 50 for public search to prevent abuse/scraping
+      .select('id invoiceId customerName total dispatched delivered createdAt phone')
+      .lean();
 
     res.json(orders);
   } catch (err) {
@@ -1255,8 +1271,14 @@ app.put('/api/admin/settings', authenticate, isAdmin, async (req, res) => {
     if (req.body.logoUrl !== undefined) settings.logoUrl = req.body.logoUrl;
     if (req.body.reportUrl !== undefined) settings.reportUrl = req.body.reportUrl;
     if (req.body.storeName !== undefined) settings.storeName = req.body.storeName;
+    if (req.body.comboBannerTitle !== undefined) settings.comboBannerTitle = req.body.comboBannerTitle;
+    if (req.body.comboBannerSub !== undefined) settings.comboBannerSub = req.body.comboBannerSub;
+    if (req.body.comboBannerDiscount !== undefined) settings.comboBannerDiscount = req.body.comboBannerDiscount;
+    if (req.body.comboBannerActive !== undefined) settings.comboBannerActive = req.body.comboBannerActive;
 
     await settings.save();
+    const io = req.app.get('io');
+    io.emit('settings_updated', settings); // Real-time update for clients
     res.json(settings);
   } catch (err) {
     res.status(500).json({ message: err.message });

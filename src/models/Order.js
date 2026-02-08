@@ -5,7 +5,7 @@ const orderSchema = new mongoose.Schema({
     id: { type: String, required: true, unique: true },
     invoiceNumber: { type: Number },
     invoiceSequence: { type: Number },
-    invoiceId: { type: String },
+    invoiceId: { type: String, index: true },
     createdAt: { type: Date, default: Date.now, index: true },
     items: [
         {
@@ -23,7 +23,7 @@ const orderSchema = new mongoose.Schema({
     deliveryFee: Number,
     total: Number,
     customerName: { type: String, default: 'Walk-in' },
-    phone: { type: String, default: '' },
+    phone: { type: String, default: '', index: true },
     address: { type: String, default: '' },
     paymentMethod: { type: String, default: 'unknown' },
     dispatched: { type: Boolean, default: false },
