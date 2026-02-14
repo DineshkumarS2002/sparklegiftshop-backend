@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression'); // Add compression
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const PDFDocument = require('pdfkit');
@@ -61,18 +62,16 @@ io.on('connection', (socket) => {
 
   if (role === 'user' && userId) {
     socket.join(`user_${userId}`);
-    console.log(`Socket ${socket.id} (User: ${userId}) joined private room`);
   } else if (role === 'admin') {
-    console.log(`Socket ${socket.id} (Admin: ${userId}) connected`);
+    // Admin joined
   } else {
-    console.log(`Socket ${socket.id} (Guest) connected`);
+    // Guest joined
   }
 
   // Join specific order room for real-time updates (Guests & Users)
   socket.on('join_order', (invoiceId) => {
     if (invoiceId) {
       socket.join(`order_${invoiceId}`);
-      console.log(`Socket ${socket.id} joined room: order_${invoiceId}`);
     }
   });
 
@@ -81,9 +80,42 @@ io.on('connection', (socket) => {
   });
 });
 
+// ============ PERFORMANCE OPTIMIZATIONS ============
+
+// 1. Enable Gzip/Brotli compression for all responses
+app.use(compression({
+  // Compression level (0-9, higher = better compression but slower)
+  level: 6,
+  // Only compress responses larger than 1KB
+  threshold: 1024,
+  // Compression filter
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) {
+      return false;
+    }
+    return compression.filter(req, res);
+  }
+}));
+
+// 2. CORS with optimized settings
 app.use(cors());
+
+// 3. JSON parsing with limits
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+// 4. Add cache control headers for API responses
+app.use((req, res, next) => {
+  // Cache static resources
+  if (req.url.match(/\.(jpg|jpeg|png|gif|webp|svg|ico|css|js|woff2|woff|ttf)$/)) {
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  }
+  // Don't cache API responses by default (can be overridden per route)
+  else if (req.url.startsWith('/api/')) {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  }
+  next();
+});
 
 // Health check
 app.get('/', (req, res) => res.send('Sparkle Gift Shop API is running...'));
