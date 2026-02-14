@@ -1011,8 +1011,8 @@ app.post('/api/orders', authenticate, async (req, res) => {
     // Final subtotal after discount
     const discountedSubtotal = Math.max(0, subtotal - discount);
 
-    // Delivery fee logic: (Testing: set to 0)
-    const deliveryFee = 0; // subtotal < 500 ? 50 : 0;
+    // Delivery fee logic: ₹50 below ₹999, free above
+    const deliveryFee = subtotal < 999 ? 50 : 0;
     const finalTotal = discountedSubtotal + deliveryFee;
 
     const invoice = await nextInvoice();
